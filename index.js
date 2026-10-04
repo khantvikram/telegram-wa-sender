@@ -3,7 +3,6 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const qrcode = require('qrcode');
 const xlsx = require('xlsx');
 const axios = require('axios');
-const fs = require('fs');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
