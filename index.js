@@ -1,57 +1,55 @@
 const { Telegraf } = require('telegraf');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const xlsx = require('xlsx');
 const axios = require('axios');
+const fs = require('fs');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 
 const bot = new Telegraf(BOT_TOKEN);
-
-const waClient = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu'
-        ],
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    }
-});
-
+let waSock = null;
 let pendingSchedule = null;
 
-waClient.on('qr', async (qr) => {
-    try {
-        const qrBuffer = await qrcode.toBuffer(qr);
-        await bot.telegram.sendPhoto(ADMIN_ID, { source: qrBuffer }, {
-            caption: "Naya QR Code (Turant scan karein)"
-        });
-    } catch (e) {
-        console.error(e);
-    }
-});
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
+    
+    waSock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false
+    });
 
-waClient.on('ready', () => {
-    bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai!");
-});
+    waSock.ev.on('creds.update', saveCreds);
 
-waClient.on('authenticated', () => {
-    bot.telegram.sendMessage(ADMIN_ID, "WhatsApp authenticated! Session sync ho raha hai...");
-});
+    waSock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-waClient.on('auth_failure', (msg) => {
-    bot.telegram.sendMessage(ADMIN_ID, "Login fail hua: " + msg);
-});
+        if (qr) {
+            try {
+                const qrBuffer = await qrcode.toBuffer(qr);
+                await bot.telegram.sendPhoto(ADMIN_ID, { source: qrBuffer }, {
+                    caption: "Naya QR Code (WhatsApp se scan karein)"
+                });
+            } catch (err) {
+                console.error("QR send error:", err);
+            }
+        }
 
-waClient.initialize();
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            } else {
+                bot.telegram.sendMessage(ADMIN_ID, "WhatsApp Log out ho gaya hai. Dobara start karein.");
+            }
+        } else if (connection === 'open') {
+            bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai!");
+        }
+    });
+}
+
+connectToWhatsApp();
 
 bot.start((ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
@@ -68,7 +66,7 @@ bot.command('set', (ctx) => {
     const timeStr = parts[0].trim();
     const message = parts[1].trim();
     pendingSchedule = { targetTime: new Date(timeStr), message: message };
-    ctx.reply(`Schedule set ho gaya: ${timeStr} par. Ab wo Excel file bhejein jisme mobile numbers hain.`);
+    ctx.reply(`Schedule set ho gaya: ${timeStr} par. Ab Excel file bhejein jisme Column A me numbers hon.`);
 });
 
 bot.on('document', async (ctx) => {
@@ -96,10 +94,10 @@ bot.on('document', async (ctx) => {
         });
 
         if (numbers.length === 0) {
-            return ctx.reply("Excel file me koi valid mobile number nahi mila (Column A me numbers hone chahiye).");
+            return ctx.reply("Excel file me koi valid number nahi mila.");
         }
 
-        ctx.reply(`${numbers.length} numbers load ho gaye hain. Set kiye gaye time par delivery start ho jayegi.`);
+        ctx.reply(`${numbers.length} numbers load ho gaye hain. Set time par delivery shuru hogi.`);
 
         const delayMs = pendingSchedule.targetTime.getTime() - Date.now();
         const executeDelay = delayMs > 0 ? delayMs : 1000;
@@ -108,19 +106,20 @@ bot.on('document', async (ctx) => {
             ctx.reply("Scheduled sending shuru ho rahi hai...");
             for (const num of numbers) {
                 try {
-                    await waClient.sendMessage(`${num}@c.us`, pendingSchedule.message);
-                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 7000) + 8000));
+                    const jid = `${num}@s.whatsapp.net`;
+                    await waSock.sendMessage(jid, { text: pendingSchedule.message });
+                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 5000) + 7000));
                 } catch (err) {
                     console.error("Message send fail:", num, err);
                 }
             }
-            ctx.reply("Saare scheduled messages complete ho gaye.");
+            ctx.reply("Saare messages successfully bhej diye gaye!");
             pendingSchedule = null;
         }, executeDelay);
 
     } catch (e) {
         console.error(e);
-        ctx.reply("File process karne me error aaya.");
+        ctx.reply("File read karne me error aaya.");
     }
 });
 
