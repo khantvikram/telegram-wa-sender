@@ -1,8 +1,18 @@
+const http = require('http');
 const { Telegraf } = require('telegraf');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const xlsx = require('xlsx');
 const axios = require('axios');
+
+// Render ke port scan error ko solve karne ke liye dummy server
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running fine!\n');
+}).listen(PORT, () => {
+    console.log(`HTTP Server listening on port ${PORT}`);
+});
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -10,6 +20,7 @@ const ADMIN_ID = process.env.ADMIN_ID;
 const bot = new Telegraf(BOT_TOKEN);
 let waSock = null;
 let pendingSchedule = null;
+let isConnected = false;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
@@ -24,7 +35,8 @@ async function connectToWhatsApp() {
     waSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
+        // QR sirf tabhi bhejo jab WhatsApp connect na hua ho
+        if (qr && !isConnected) {
             try {
                 const qrBuffer = await qrcode.toBuffer(qr);
                 await bot.telegram.sendPhoto(ADMIN_ID, { source: qrBuffer }, {
@@ -36,6 +48,7 @@ async function connectToWhatsApp() {
         }
 
         if (connection === 'close') {
+            isConnected = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
                 connectToWhatsApp();
@@ -43,7 +56,8 @@ async function connectToWhatsApp() {
                 bot.telegram.sendMessage(ADMIN_ID, "WhatsApp Log out ho gaya hai. Dobara start karein.");
             }
         } else if (connection === 'open') {
-            bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai!");
+            isConnected = true;
+            bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai! Ab koi naya QR nahi aayega.");
         }
     });
 }
@@ -52,7 +66,7 @@ connectToWhatsApp();
 
 bot.start((ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
-    ctx.reply("Bot ready hai. Schedule karne ke liye command bhejein:\n\n/set 2026-10-05 10:30 | Aapka Message Yahan\n\nUske baad Excel file (.xlsx) bhej dein.");
+    ctx.reply("Bot ready hai. Schedule karne ke liye command bhejein:\n\n/set 2026-10-05 10:30 | Aapka Message Yahan\n\nUske baad Excel file (.xlsx ya .csv) bhej dein.");
 });
 
 bot.command('set', (ctx) => {
