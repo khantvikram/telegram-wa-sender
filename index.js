@@ -13,7 +13,16 @@ const waClient = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ],
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
 });
 
@@ -23,7 +32,7 @@ waClient.on('qr', async (qr) => {
     try {
         const qrBuffer = await qrcode.toBuffer(qr);
         await bot.telegram.sendPhoto(ADMIN_ID, { source: qrBuffer }, {
-            caption: "WhatsApp Web scan karein login karne ke liye."
+            caption: "Naya QR Code (Turant scan karein)"
         });
     } catch (e) {
         console.error(e);
@@ -32,6 +41,14 @@ waClient.on('qr', async (qr) => {
 
 waClient.on('ready', () => {
     bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai!");
+});
+
+waClient.on('authenticated', () => {
+    bot.telegram.sendMessage(ADMIN_ID, "WhatsApp authenticated! Session sync ho raha hai...");
+});
+
+waClient.on('auth_failure', (msg) => {
+    bot.telegram.sendMessage(ADMIN_ID, "Login fail hua: " + msg);
 });
 
 waClient.initialize();
@@ -92,7 +109,6 @@ bot.on('document', async (ctx) => {
             for (const num of numbers) {
                 try {
                     await waClient.sendMessage(`${num}@c.us`, pendingSchedule.message);
-                    // 8-15 second gap har message ke beech anti-ban ke liye
                     await new Promise(r => setTimeout(r, Math.floor(Math.random() * 7000) + 8000));
                 } catch (err) {
                     console.error("Message send fail:", num, err);
@@ -109,4 +125,3 @@ bot.on('document', async (ctx) => {
 });
 
 bot.launch();
-          
