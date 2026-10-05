@@ -15,17 +15,23 @@ function getRole(slot) {
 }
 
 async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
-    const sessionDir = path.join(__dirname, 'auth_sessions', `slot_${slotNumber}`);
+    const baseDir = path.join(__dirname, 'auth_sessions');
+    const sessionDir = path.join(baseDir, `slot_${slotNumber}`);
+    
+    // Directory banayein agar nahi hai taaki ENOENT crash na ho
+    if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+    }
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
 
     if (!hasCreds && (!phoneNumber || typeof phoneNumber !== 'string')) {
         statusMap[slotNumber] = 'DISCONNECTED';
         return null;
-    }
-
-    if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -46,14 +52,11 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     sessions[slotNumber] = sock;
     statusMap[slotNumber] = 'CONNECTING';
 
-    // Agar account linked nahi hai aur phone number mila hai:
     if (!sock.authState.creds.registered && phoneNumber) {
         setTimeout(async () => {
             try {
                 let cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
                 const code = await sock.requestPairingCode(cleanNumber);
-                
-                // Code formatting (e.g. 1234-5678)
                 const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
 
                 await bot.telegram.sendMessage(adminId, 
@@ -61,16 +64,16 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
                     `👉 \`${formattedCode}\`\n\n` +
                     `*(Code par tap karke copy karein)*\n\n` +
                     `*Steps:*\n` +
-                    `1. WhatsApp ➔ Settings / 3 dots ➔ Linked Devices\n` +
+                    `1. WhatsApp ➔ Settings (⋮) ➔ Linked Devices\n` +
                     `2. *Link with phone number instead* chunein\n` +
                     `3. Yeh code daalein`, 
                     { parse_mode: 'Markdown' }
                 );
             } catch (err) {
                 console.error(`Pairing code error slot ${slotNumber}:`, err);
-                await bot.telegram.sendMessage(adminId, `❌ Pairing code mangane me error: ${err.message}`);
+                await bot.telegram.sendMessage(adminId, `❌ Pairing code error: ${err.message}`);
             }
-        }, 5000); // 5 sec wait socket ready hone ke liye
+        }, 5000);
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -139,8 +142,12 @@ function getSlotInfo(slotNumber) {
 }
 
 function autoBootSavedSessions(bot, adminId) {
+    const baseDir = path.join(__dirname, 'auth_sessions');
+    if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+    }
     for (let i = 1; i <= 15; i++) {
-        const credsFile = path.join(__dirname, 'auth_sessions', `slot_${i}`, 'creds.json');
+        const credsFile = path.join(baseDir, `slot_${i}`, 'creds.json');
         if (fs.existsSync(credsFile)) {
             initSlot(i, bot, adminId, null);
         }
