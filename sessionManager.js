@@ -7,6 +7,12 @@ const sessions = {};
 const statusMap = {}; 
 const phoneMap = {};
 
+function ensureDir(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+}
+
 function getRole(slot) {
     if (slot >= 1 && slot <= 10) return 'Sender';
     if (slot >= 11 && slot <= 14) return 'AI Closer';
@@ -18,13 +24,9 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     const baseDir = path.join(__dirname, 'auth_sessions');
     const sessionDir = path.join(baseDir, `slot_${slotNumber}`);
     
-    // Directory banayein agar nahi hai taaki ENOENT crash na ho
-    if (!fs.existsSync(baseDir)) {
-        fs.mkdirSync(baseDir, { recursive: true });
-    }
-    if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-    }
+    // Directory pehle hi create kar lein
+    ensureDir(baseDir);
+    ensureDir(sessionDir);
 
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
@@ -62,18 +64,18 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
                 await bot.telegram.sendMessage(adminId, 
                     `🔢 *Slot #${slotNumber} Pairing Code:*\n\n` +
                     `👉 \`${formattedCode}\`\n\n` +
-                    `*(Code par tap karke copy karein)*\n\n` +
                     `*Steps:*\n` +
-                    `1. WhatsApp ➔ Settings (⋮) ➔ Linked Devices\n` +
-                    `2. *Link with phone number instead* chunein\n` +
-                    `3. Yeh code daalein`, 
+                    `1. WhatsApp kholein ➔ Three dots (⋮) / Settings ➔ Linked Devices\n` +
+                    `2. *Link a Device* par tap karein\n` +
+                    `3. Neeche *Link with phone number instead* chunein\n` +
+                    `4. Yeh 8-digit code wahan daalein`, 
                     { parse_mode: 'Markdown' }
                 );
             } catch (err) {
                 console.error(`Pairing code error slot ${slotNumber}:`, err);
-                await bot.telegram.sendMessage(adminId, `❌ Pairing code error: ${err.message}`);
+                await bot.telegram.sendMessage(adminId, `❌ Pairing error: ${err.message}`);
             }
-        }, 5000);
+        }, 4000);
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -100,7 +102,7 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
             let userPhone = sock.user?.id ? sock.user.id.split(':')[0] : 'Linked';
             phoneMap[slotNumber] = userPhone;
 
-            await bot.telegram.sendMessage(adminId, `🎉 *WhatsApp Slot #${slotNumber} Successfully Linked!*\nNumber: *+${userPhone}*\nRole: *${getRole(slotNumber)}*`, { parse_mode: 'Markdown' });
+            await bot.telegram.sendMessage(adminId, `🎉 *Slot #${slotNumber} Successfully Connected!*\nNumber: *+${userPhone}*\nRole: *${getRole(slotNumber)}*`, { parse_mode: 'Markdown' });
         }
     });
 
@@ -143,11 +145,11 @@ function getSlotInfo(slotNumber) {
 
 function autoBootSavedSessions(bot, adminId) {
     const baseDir = path.join(__dirname, 'auth_sessions');
-    if (!fs.existsSync(baseDir)) {
-        fs.mkdirSync(baseDir, { recursive: true });
-    }
+    ensureDir(baseDir);
     for (let i = 1; i <= 15; i++) {
-        const credsFile = path.join(baseDir, `slot_${i}`, 'creds.json');
+        const slotDir = path.join(baseDir, `slot_${i}`);
+        ensureDir(slotDir);
+        const credsFile = path.join(slotDir, 'creds.json');
         if (fs.existsSync(credsFile)) {
             initSlot(i, bot, adminId, null);
         }
