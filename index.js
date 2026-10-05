@@ -18,7 +18,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 
 const bot = new Telegraf(BOT_TOKEN);
-let awaitingPhoneSlot = null; // Track kaunse slot ke liye phone number maanga hai
+let awaitingPhoneSlot = null;
 
 autoBootSavedSessions(bot, ADMIN_ID);
 
@@ -127,7 +127,6 @@ bot.action('menu_back', (ctx) => {
     ctx.reply("🔥 Main Dashboard:", getMainMenu());
 });
 
-// Normal message / Phone number input handler
 bot.on('text', async (ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
 
@@ -139,14 +138,13 @@ bot.on('text', async (ctx) => {
             const slotTarget = awaitingPhoneSlot;
             awaitingPhoneSlot = null;
             ctx.reply(`⏳ Slot #${slotTarget} ke liye Pairing Code request kiya ja raha hai... Number: +${inputNum}`);
-            initSlot(slotTarget, bot, ADMIN_ID, inputNum);
+            initSlot(slotTarget, bot, ADMIN_ID, String(inputNum));
         } else {
-            ctx.reply("❌ Phone number galat lag raha hai. Kripya 10 ya 12 digit ka valid number bhejein (Jaise: 9198XXXXXXXX).");
+            ctx.reply("❌ Number invalid lag raha hai. Kripya 10 ya 12 digit number bhejein (Jaise: 9198XXXXXXXX).");
         }
     }
 });
 
-// Excel Document handler
 bot.on('document', async (ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
 
@@ -186,7 +184,7 @@ bot.command('set_template', (ctx) => {
         db.saveTemplate(id, text);
         ctx.reply(`✅ Template #${id} successfully saved!`);
     } else {
-        ctx.reply("Usage: /set_template <1-10> <Aapka Message {name} ke sath>");
+        ctx.reply("Usage: /set_template <1-10> <Message {name} ke sath>");
     }
 });
 
@@ -196,4 +194,20 @@ bot.command('start_campaign', (ctx) => {
     startMatrixCampaign(contacts, bot, ADMIN_ID);
 });
 
-bot.launch();
+// Bot safe launch with conflict recovery
+async function launchTelegramBot() {
+    try {
+        await bot.launch({
+            dropPendingUpdates: true // Purane atke huye conflict requests drop kar dega
+        });
+        console.log("Telegram Bot launched successfully!");
+    } catch (err) {
+        console.error("Bot launch error, retrying in 5s:", err.message);
+        setTimeout(launchTelegramBot, 5000);
+    }
+}
+
+launchTelegramBot();
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
