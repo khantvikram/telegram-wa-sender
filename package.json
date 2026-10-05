@@ -8,6 +8,8 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "axios": "^1.6.8",
+    "better-sqlite3": "^11.8.1",
+    "pino": "^9.6.0",
     "qrcode": "^1.5.3",
     "telegraf": "^4.16.3",
     "xlsx": "^0.18.5"
