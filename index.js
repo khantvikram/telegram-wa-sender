@@ -1,139 +1,132 @@
 const http = require('http');
-const { Telegraf } = require('telegraf');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode');
+const { Telegraf, Markup } = require('telegraf');
 const xlsx = require('xlsx');
 const axios = require('axios');
 
-// Render ke port scan error ko solve karne ke liye dummy server
+const db = require('./database');
+const { initSlot, getStatusSummary, sessions } = require('./sessionManager');
+const { startMatrixCampaign, pauseCampaign, resumeCampaign } = require('./matrixEngine');
+const { runGroupSeeding } = require('./groupEngine');
+
+// Render keep-alive dummy web server
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running fine!\n');
-}).listen(PORT, () => {
-    console.log(`HTTP Server listening on port ${PORT}`);
-});
+    res.end('Enterprise WA Engine Live & Active!\n');
+}).listen(PORT, () => console.log(`Keep-alive server on port ${PORT}`));
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_ID = process.env.ADMIN_ID;
 
-const bot = new Telegraf(BOT_TOKEN);
-let waSock = null;
-let pendingSchedule = null;
-let isConnected = false;
-
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
-    
-    waSock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false
-    });
-
-    waSock.ev.on('creds.update', saveCreds);
-
-    waSock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // QR sirf tabhi bhejo jab WhatsApp connect na hua ho
-        if (qr && !isConnected) {
-            try {
-                const qrBuffer = await qrcode.toBuffer(qr);
-                await bot.telegram.sendPhoto(ADMIN_ID, { source: qrBuffer }, {
-                    caption: "Naya QR Code (WhatsApp se scan karein)"
-                });
-            } catch (err) {
-                console.error("QR send error:", err);
-            }
-        }
-
-        if (connection === 'close') {
-            isConnected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            } else {
-                bot.telegram.sendMessage(ADMIN_ID, "WhatsApp Log out ho gaya hai. Dobara start karein.");
-            }
-        } else if (connection === 'open') {
-            isConnected = true;
-            bot.telegram.sendMessage(ADMIN_ID, "WhatsApp successfully link ho chuka hai! Ab koi naya QR nahi aayega.");
-        }
-    });
+// Auto-boot WhatsApp slots (1 to 15)
+for (let i = 1; i <= 15; i++) {
+    initSlot(i, bot, ADMIN_ID);
 }
 
-connectToWhatsApp();
+// Master Dashboard UI Keyboards
+const mainMenu = Markup.inlineKeyboard([
+    [Markup.button.callback('📱 Manage WhatsApp (1-15)', 'menu_slots'), Markup.button.callback('📊 Fleet Live Status', 'menu_status')],
+    [Markup.button.callback('🚀 New Matrix Campaign', 'menu_campaign'), Markup.button.callback('📂 Audience Vault (CRM)', 'menu_vault')],
+    [Markup.button.callback('⏸️️ Pause Campaign', 'btn_pause'), Markup.button.callback('▶️ Resume Campaign', 'btn_resume')],
+    [Markup.button.callback('📝 10-Template Manager', 'menu_templates'), Markup.button.callback('🛡️ Anti-Ban Controls', 'menu_antiban')],
+    [Markup.button.callback('👥 Safe Group Growth', 'menu_group'), Markup.button.callback('📋 Delivery Report', 'menu_report')]
+]);
 
 bot.start((ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
-    ctx.reply("Bot ready hai. Schedule karne ke liye command bhejein:\n\n/set 2026-10-05 10:30 | Aapka Message Yahan\n\nUske baad Excel file (.xlsx ya .csv) bhej dein.");
+    ctx.reply("🔥 *ENTERPRISE WA MARKETING SUITE*\nSelect an option below to control your fleet:", {
+        parse_mode: 'Markdown',
+        ...mainMenu
+    });
 });
 
-bot.command('set', (ctx) => {
-    if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
-    const input = ctx.message.text.replace('/set', '').trim();
-    const parts = input.split('|');
-    if (parts.length < 2) {
-        return ctx.reply("Format galat hai. Aise bhejein:\n/set YYYY-MM-DD HH:MM | Message");
+// Dashboard Actions
+bot.action('menu_status', (ctx) => {
+    ctx.reply(getStatusSummary(), { parse_mode: 'Markdown' });
+});
+
+bot.action('menu_slots', (ctx) => {
+    let buttons = [];
+    for (let i = 1; i <= 15; i += 3) {
+        buttons.push([
+            Markup.button.callback(`Slot #${i} QR`, `slot_qr_${i}`),
+            Markup.button.callback(`Slot #${i+1} QR`, `slot_qr_${i+1}`),
+            Markup.button.callback(`Slot #${i+2} QR`, `slot_qr_${i+2}`)
+        ]);
     }
-    const timeStr = parts[0].trim();
-    const message = parts[1].trim();
-    pendingSchedule = { targetTime: new Date(timeStr), message: message };
-    ctx.reply(`Schedule set ho gaya: ${timeStr} par. Ab Excel file bhejein jisme Column A me numbers hon.`);
+    buttons.push([Markup.button.callback('🔙 Back to Dashboard', 'menu_back')]);
+    ctx.reply("📱 Select slot to view or scan QR:", Markup.inlineKeyboard(buttons));
 });
 
+bot.action(/slot_qr_(\d+)/, (ctx) => {
+    const slotId = parseInt(ctx.match[1]);
+    initSlot(slotId, bot, ADMIN_ID);
+    ctx.reply(`Slot #${slotId} initialization triggered. QR code photo aane par WhatsApp se scan karein.`);
+});
+
+bot.action('btn_pause', (ctx) => {
+    pauseCampaign();
+    ctx.reply("⏸️ Pause signal sent to Matrix Campaign.");
+});
+
+bot.action('btn_resume', (ctx) => {
+    resumeCampaign(bot, ADMIN_ID);
+    ctx.reply("▶️ Resuming campaign from last saved index.");
+});
+
+bot.action('menu_back', (ctx) => {
+    ctx.reply("🔥 Main Dashboard:", mainMenu);
+});
+
+// Excel / Document Contact Ingestion
 bot.on('document', async (ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
-    if (!pendingSchedule) {
-        return ctx.reply("Pehle /set command se time aur message configure karein.");
-    }
 
     try {
         const fileId = ctx.message.document.file_id;
         const fileLink = await ctx.telegram.getFileLink(fileId);
         const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
-        
+
         const workbook = xlsx.read(response.data, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
-        
-        const numbers = [];
+        const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+
+        let loaded = 0;
         data.forEach(row => {
             if (row && row[0]) {
                 let num = row[0].toString().replace(/[^0-9]/g, '');
                 if (num.length === 10) num = '91' + num;
-                if (num.length >= 11) numbers.push(num);
+                let name = row[1] ? row[1].toString() : null;
+                if (num.length >= 11) {
+                    db.saveContact(num, name, 'Excel Import');
+                    loaded++;
+                }
             }
         });
 
-        if (numbers.length === 0) {
-            return ctx.reply("Excel file me koi valid number nahi mila.");
-        }
-
-        ctx.reply(`${numbers.length} numbers load ho gaye hain. Set time par delivery shuru hogi.`);
-
-        const delayMs = pendingSchedule.targetTime.getTime() - Date.now();
-        const executeDelay = delayMs > 0 ? delayMs : 1000;
-
-        setTimeout(async () => {
-            ctx.reply("Scheduled sending shuru ho rahi hai...");
-            for (const num of numbers) {
-                try {
-                    const jid = `${num}@s.whatsapp.net`;
-                    await waSock.sendMessage(jid, { text: pendingSchedule.message });
-                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 5000) + 7000));
-                } catch (err) {
-                    console.error("Message send fail:", num, err);
-                }
-            }
-            ctx.reply("Saare messages successfully bhej diye gaye!");
-            pendingSchedule = null;
-        }, executeDelay);
-
+        ctx.reply(`✅ *${loaded} Contacts Loaded into Vault!*\nAb aap seedha *New Matrix Campaign* start kar sakte hain.`, { parse_mode: 'Markdown' });
     } catch (e) {
         console.error(e);
-        ctx.reply("File read karne me error aaya.");
+        ctx.reply("File parse karne me error aaya.");
     }
+});
+
+// Text commands (Template setup & Matrix start)
+bot.command('set_template', (ctx) => {
+    const parts = ctx.message.text.split(' ');
+    const id = parseInt(parts[1]);
+    const text = parts.slice(2).join(' ');
+    if (id >= 1 && id <= 10 && text) {
+        db.saveTemplate(id, text);
+        ctx.reply(`✅ Template #${id} successfully saved!`);
+    } else {
+        ctx.reply("Usage: /set_template <1-10> <Message Text with {name}>");
+    }
+});
+
+bot.command('start_campaign', (ctx) => {
+    let contacts = db.getAllContacts();
+    if (contacts.length === 0) return ctx.reply("Vault me koi valid contacts nahi hain! Pehle Excel upload karein.");
+    startMatrixCampaign(contacts, bot, ADMIN_ID);
 });
 
 bot.launch();
