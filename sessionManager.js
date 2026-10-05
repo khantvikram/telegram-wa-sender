@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
@@ -19,7 +19,6 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
 
-    // Agar session nahi hai aur valid phone number nahi mila toh return
     if (!hasCreds && (!phoneNumber || typeof phoneNumber !== 'string')) {
         statusMap[slotNumber] = 'DISCONNECTED';
         return null;
@@ -30,40 +29,48 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
+        version,
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome'),
-        syncFullHistory: false
+        browser: Browsers.macOS('Desktop'),
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000
     });
 
     sessions[slotNumber] = sock;
     statusMap[slotNumber] = 'CONNECTING';
 
-    // Agar session nahi hai aur phone number diya hai tabhi Pairing Code generate karein
-    if (!sock.authState.creds.registered && typeof phoneNumber === 'string') {
+    // Agar account linked nahi hai aur phone number mila hai:
+    if (!sock.authState.creds.registered && phoneNumber) {
         setTimeout(async () => {
             try {
-                let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+                let cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
                 const code = await sock.requestPairingCode(cleanNumber);
+                
+                // Code formatting (e.g. 1234-5678)
+                const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
+
                 await bot.telegram.sendMessage(adminId, 
                     `🔢 *Slot #${slotNumber} Pairing Code:*\n\n` +
-                    `👉 \`${code}\`\n\n` +
+                    `👉 \`${formattedCode}\`\n\n` +
                     `*(Code par tap karke copy karein)*\n\n` +
-                    `*Link Kaise Karein:*\n` +
-                    `1. WhatsApp kholein ➔ Three dots (⋮) ya Settings.\n` +
-                    `2. *Linked Devices* par tap karein.\n` +
-                    `3. *Link with phone number instead* par tap karein.\n` +
-                    `4. Yeh 8-digit code wahan paste kar dein!`, 
+                    `*Steps:*\n` +
+                    `1. WhatsApp ➔ Settings / 3 dots ➔ Linked Devices\n` +
+                    `2. *Link with phone number instead* chunein\n` +
+                    `3. Yeh code daalein`, 
                     { parse_mode: 'Markdown' }
                 );
             } catch (err) {
-                console.error(`Pairing code error slot ${slotNumber}:`, err.message);
-                await bot.telegram.sendMessage(adminId, `❌ Pairing code error: ${err.message}`);
+                console.error(`Pairing code error slot ${slotNumber}:`, err);
+                await bot.telegram.sendMessage(adminId, `❌ Pairing code mangane me error: ${err.message}`);
             }
-        }, 3000);
+        }, 5000); // 5 sec wait socket ready hone ke liye
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -112,7 +119,7 @@ async function logoutSlot(slotNumber, bot, adminId) {
     statusMap[slotNumber] = 'DISCONNECTED';
     delete phoneMap[slotNumber];
 
-    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} disconnected.`);
+    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} clear ho gaya.`);
 }
 
 function getActiveSockets(minSlot = 1, maxSlot = 10) {
@@ -150,4 +157,3 @@ module.exports = {
     phoneMap,
     getRole
 };
-            
