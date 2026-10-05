@@ -35,10 +35,16 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false
+        printQRInTerminal: false,
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000
     });
 
     sessions[slotNumber] = sock;
+    
     statusMap[slotNumber] = 'CONNECTING';
 
     sock.ev.on('creds.update', saveCreds);
