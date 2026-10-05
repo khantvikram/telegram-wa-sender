@@ -19,7 +19,8 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
 
-    if (!hasCreds && !phoneNumber) {
+    // Agar session nahi hai aur valid phone number nahi mila toh return
+    if (!hasCreds && (!phoneNumber || typeof phoneNumber !== 'string')) {
         statusMap[slotNumber] = 'DISCONNECTED';
         return null;
     }
@@ -41,8 +42,8 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     sessions[slotNumber] = sock;
     statusMap[slotNumber] = 'CONNECTING';
 
-    // Agar session nahi hai aur number diya hai toh Pairing Code maango
-    if (!sock.authState.creds.registered && phoneNumber) {
+    // Agar session nahi hai aur phone number diya hai tabhi Pairing Code generate karein
+    if (!sock.authState.creds.registered && typeof phoneNumber === 'string') {
         setTimeout(async () => {
             try {
                 let cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -50,8 +51,8 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
                 await bot.telegram.sendMessage(adminId, 
                     `🔢 *Slot #${slotNumber} Pairing Code:*\n\n` +
                     `👉 \`${code}\`\n\n` +
-                    `*(Code par click karke copy karein)*\n\n` +
-                    `*Kaise Link Karein:*\n` +
+                    `*(Code par tap karke copy karein)*\n\n` +
+                    `*Link Kaise Karein:*\n` +
                     `1. WhatsApp kholein ➔ Three dots (⋮) ya Settings.\n` +
                     `2. *Linked Devices* par tap karein.\n` +
                     `3. *Link with phone number instead* par tap karein.\n` +
@@ -60,7 +61,7 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
                 );
             } catch (err) {
                 console.error(`Pairing code error slot ${slotNumber}:`, err.message);
-                await bot.telegram.sendMessage(adminId, `❌ Pairing code mangane me error aaya: ${err.message}`);
+                await bot.telegram.sendMessage(adminId, `❌ Pairing code error: ${err.message}`);
             }
         }, 3000);
     }
@@ -149,3 +150,4 @@ module.exports = {
     phoneMap,
     getRole
 };
+            
