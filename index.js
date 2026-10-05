@@ -63,7 +63,7 @@ function generateSlotsKeyboard() {
 
 bot.action('menu_slots', (ctx) => {
     awaitingPhoneSlot = null;
-    ctx.reply("📱 *WhatsApp Slots Manager (1-15)*\n\nJis slot ko connect karna hai uspar tap karein:", {
+    ctx.reply("📱 *WhatsApp Slots Manager (1-15)*\n\nSlot select karein:", {
         parse_mode: 'Markdown',
         ...generateSlotsKeyboard()
     });
@@ -82,11 +82,18 @@ bot.action(/manage_slot_(\d+)/, (ctx) => {
     if (info.status === 'CONNECTED') {
         buttons.push([Markup.button.callback(`❌ Disconnect / Logout Slot #${slotId}`, `logout_slot_${slotId}`)]);
     } else {
-        buttons.push([Markup.button.callback(`🔢 Connect via Pairing Code (No QR)`, `pair_slot_${slotId}`)]);
+        buttons.push([Markup.button.callback(`📷 Connect via Fresh QR Code`, `qr_slot_${slotId}`)]);
+        buttons.push([Markup.button.callback(`🔢 Connect via Pairing Code`, `pair_slot_${slotId}`)]);
     }
     buttons.push([Markup.button.callback('🔙 Back to Slots', 'menu_slots')]);
 
     ctx.reply(msg, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+bot.action(/qr_slot_(\d+)/, (ctx) => {
+    const slotId = parseInt(ctx.match[1]);
+    ctx.reply(`⏳ Slot #${slotId} ke liye QR Code generate ho raha hai... Jaise hi photo aaye WhatsApp se turant scan karein.`);
+    initSlot(slotId, bot, ADMIN_ID, 'QR', null);
 });
 
 bot.action(/pair_slot_(\d+)/, (ctx) => {
@@ -98,7 +105,7 @@ bot.action(/pair_slot_(\d+)/, (ctx) => {
 bot.action(/logout_slot_(\d+)/, async (ctx) => {
     const slotId = parseInt(ctx.match[1]);
     await logoutSlot(slotId, bot, ADMIN_ID);
-    ctx.reply(`Slot #${slotId} disconnect kar diya gaya hai.`);
+    ctx.reply(`Slot #${slotId} reset ho gaya.`);
 });
 
 bot.action('menu_report', (ctx) => {
@@ -137,10 +144,10 @@ bot.on('text', async (ctx) => {
         if (inputNum.length >= 11) {
             const slotTarget = awaitingPhoneSlot;
             awaitingPhoneSlot = null;
-            ctx.reply(`⏳ Slot #${slotTarget} ke liye Pairing Code request kiya ja raha hai... Number: +${inputNum}`);
-            initSlot(slotTarget, bot, ADMIN_ID, String(inputNum));
+            ctx.reply(`⏳ Slot #${slotTarget} ke liye Pairing Code mangaya ja raha hai... Number: +${inputNum}`);
+            initSlot(slotTarget, bot, ADMIN_ID, 'PAIR', String(inputNum));
         } else {
-            ctx.reply("❌ Number invalid lag raha hai. Kripya 10 ya 12 digit number bhejein (Jaise: 9198XXXXXXXX).");
+            ctx.reply("❌ Invalid Number! 10 ya 12 digit number bhejein (Jaise: 9198XXXXXXXX).");
         }
     }
 });
@@ -194,12 +201,9 @@ bot.command('start_campaign', (ctx) => {
     startMatrixCampaign(contacts, bot, ADMIN_ID);
 });
 
-// Bot safe launch with conflict recovery
 async function launchTelegramBot() {
     try {
-        await bot.launch({
-            dropPendingUpdates: true // Purane atke huye conflict requests drop kar dega
-        });
+        await bot.launch({ dropPendingUpdates: true });
         console.log("Telegram Bot launched successfully!");
     } catch (err) {
         console.error("Bot launch error, retrying in 5s:", err.message);
@@ -211,3 +215,4 @@ launchTelegramBot();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+        
