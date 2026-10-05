@@ -4,7 +4,7 @@ const xlsx = require('xlsx');
 const axios = require('axios');
 
 const db = require('./database');
-const { initSlot, getStatusSummary, sessions } = require('./sessionManager');
+const { initSlot, logoutSlot, autoBootSavedSessions, getSlotInfo } = require('./sessionManager');
 const { startMatrixCampaign, pauseCampaign, resumeCampaign } = require('./matrixEngine');
 const { runGroupSeeding } = require('./groupEngine');
 
@@ -12,73 +12,127 @@ const { runGroupSeeding } = require('./groupEngine');
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Enterprise WA Engine Live & Active!\n');
+    res.end('Enterprise WA Engine Active & Running!\n');
 }).listen(PORT, () => console.log(`Keep-alive server on port ${PORT}`));
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 
-// Auto-boot WhatsApp slots (1 to 15)
-for (let i = 1; i <= 15; i++) {
-    initSlot(i, bot, ADMIN_ID);
-}
+const bot = new Telegraf(BOT_TOKEN);
 
-// Master Dashboard UI Keyboards
-const mainMenu = Markup.inlineKeyboard([
-    [Markup.button.callback('📱 Manage WhatsApp (1-15)', 'menu_slots'), Markup.button.callback('📊 Fleet Live Status', 'menu_status')],
-    [Markup.button.callback('🚀 New Matrix Campaign', 'menu_campaign'), Markup.button.callback('📂 Audience Vault (CRM)', 'menu_vault')],
-    [Markup.button.callback('⏸️️ Pause Campaign', 'btn_pause'), Markup.button.callback('▶️ Resume Campaign', 'btn_resume')],
-    [Markup.button.callback('📝 10-Template Manager', 'menu_templates'), Markup.button.callback('🛡️ Anti-Ban Controls', 'menu_antiban')],
-    [Markup.button.callback('👥 Safe Group Growth', 'menu_group'), Markup.button.callback('📋 Delivery Report', 'menu_report')]
-]);
+// Sirf wahi number connect honge jo pehle se scan the (Zero QR spam)
+autoBootSavedSessions(bot, ADMIN_ID);
+
+// Main Navigation Menu
+function getMainMenu() {
+    return Markup.inlineKeyboard([
+        [Markup.button.callback('📱 Manage WhatsApp Slots (1-15)', 'menu_slots')],
+        [Markup.button.callback('🚀 New Matrix Campaign', 'menu_campaign'), Markup.button.callback('📂 Audience Vault', 'menu_vault')],
+        [Markup.button.callback('⏸️ Pause Campaign', 'btn_pause'), Markup.button.callback('▶️ Resume Campaign', 'btn_resume')],
+        [Markup.button.callback('📝 10-Template Manager', 'menu_templates'), Markup.button.callback('👥 Safe Group Growth', 'menu_group')],
+        [Markup.button.callback('📋 Delivery & Fleet Report', 'menu_report')]
+    ]);
+}
 
 bot.start((ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
-    ctx.reply("🔥 *ENTERPRISE WA MARKETING SUITE*\nSelect an option below to control your fleet:", {
+    ctx.reply("🔥 *ENTERPRISE WA MARKETING DASHBOARD*\n\nNeeche diye gaye buttons se control karein:", {
         parse_mode: 'Markdown',
-        ...mainMenu
+        ...getMainMenu()
     });
 });
 
-// Dashboard Actions
-bot.action('menu_status', (ctx) => {
-    ctx.reply(getStatusSummary(), { parse_mode: 'Markdown' });
-});
+// Slot Management Menu Generator
+function generateSlotsKeyboard() {
+    const buttons = [];
+    for (let i = 1; i <= 15; i++) {
+        const info = getSlotInfo(i);
+        let btnText = "";
+        
+        if (info.status === 'CONNECTED' && info.phone) {
+            btnText = `🟢 #${i}: +${info.phone} (${info.role})`;
+        } else if (info.status === 'CONNECTING') {
+            btnText = `🟡 #${i}: Connecting...`;
+        } else {
+            btnText = `🔴 #${i}: Free / Empty (${info.role})`;
+        }
+
+        buttons.push([Markup.button.callback(btnText, `manage_slot_${i}`)]);
+    }
+    buttons.push([Markup.button.callback('🔙 Back to Main Menu', 'menu_back')]);
+    return Markup.inlineKeyboard(buttons);
+}
 
 bot.action('menu_slots', (ctx) => {
-    let buttons = [];
-    for (let i = 1; i <= 15; i += 3) {
-        buttons.push([
-            Markup.button.callback(`Slot #${i} QR`, `slot_qr_${i}`),
-            Markup.button.callback(`Slot #${i+1} QR`, `slot_qr_${i+1}`),
-            Markup.button.callback(`Slot #${i+2} QR`, `slot_qr_${i+2}`)
-        ]);
-    }
-    buttons.push([Markup.button.callback('🔙 Back to Dashboard', 'menu_back')]);
-    ctx.reply("📱 Select slot to view or scan QR:", Markup.inlineKeyboard(buttons));
+    ctx.reply("📱 *WhatsApp Slots Manager (1-15)*\n\nJis slot par click karenge, uska status/QR manage kar sakenge:", {
+        parse_mode: 'Markdown',
+        ...generateSlotsKeyboard()
+    });
 });
 
-bot.action(/slot_qr_(\d+)/, (ctx) => {
+// Single Slot Detail & Actions
+bot.action(/manage_slot_(\d+)/, (ctx) => {
     const slotId = parseInt(ctx.match[1]);
-    initSlot(slotId, bot, ADMIN_ID);
-    ctx.reply(`Slot #${slotId} initialization triggered. QR code photo aane par WhatsApp se scan karein.`);
+    const info = getSlotInfo(slotId);
+
+    let msg = `⚙️ *Slot #${slotId} Details:*\n`;
+    msg += `Role: *${info.role}*\n`;
+    msg += `Status: *${info.status}*\n`;
+    if (info.phone) msg += `Phone Number: *+${info.phone}*\n`;
+
+    const buttons = [];
+    if (info.status === 'CONNECTED') {
+        buttons.push([Markup.button.callback(`❌ Disconnect / Logout Slot #${slotId}`, `logout_slot_${slotId}`)]);
+    } else {
+        buttons.push([Markup.button.callback(`📲 Get QR Code to Connect Slot #${slotId}`, `get_qr_${slotId}`)]);
+    }
+    buttons.push([Markup.button.callback('🔙 Back to Slots', 'menu_slots')]);
+
+    ctx.reply(msg, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
+// Request QR for specific slot
+bot.action(/get_qr_(\d+)/, (ctx) => {
+    const slotId = parseInt(ctx.match[1]);
+    ctx.reply(`⏳ Slot #${slotId} ke liye QR Code generate ho raha hai... WhatsApp photo aate hi scan karein.`);
+    initSlot(slotId, bot, ADMIN_ID, true);
+});
+
+// Logout specific slot
+bot.action(/logout_slot_(\d+)/, async (ctx) => {
+    const slotId = parseInt(ctx.match[1]);
+    await logoutSlot(slotId, bot, ADMIN_ID);
+    ctx.reply(`Slot #${slotId} disconnect kar diya gaya hai.`);
+});
+
+// Fleet Report
+bot.action('menu_report', (ctx) => {
+    let report = "📊 *Live Fleet Report (1-15):*\n\n";
+    for (let i = 1; i <= 15; i++) {
+        const info = getSlotInfo(i);
+        const icon = info.status === 'CONNECTED' ? '🟢' : '🔴';
+        const phone = info.phone ? `(+${info.phone})` : '(No Device)';
+        report += `${icon} *Slot #${i}* [${info.role}]: ${info.status} ${phone}\n`;
+    }
+    ctx.reply(report, { parse_mode: 'Markdown' });
+});
+
+// Pause / Resume
 bot.action('btn_pause', (ctx) => {
     pauseCampaign();
-    ctx.reply("⏸️ Pause signal sent to Matrix Campaign.");
+    ctx.reply("⏸️ Matrix Campaign paused!");
 });
 
 bot.action('btn_resume', (ctx) => {
     resumeCampaign(bot, ADMIN_ID);
-    ctx.reply("▶️ Resuming campaign from last saved index.");
+    ctx.reply("▶️ Resuming Matrix Campaign from saved position...");
 });
 
 bot.action('menu_back', (ctx) => {
-    ctx.reply("🔥 Main Dashboard:", mainMenu);
+    ctx.reply("🔥 Main Dashboard:", getMainMenu());
 });
 
-// Excel / Document Contact Ingestion
+// Excel Contact File Upload
 bot.on('document', async (ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
 
@@ -97,20 +151,20 @@ bot.on('document', async (ctx) => {
                 if (num.length === 10) num = '91' + num;
                 let name = row[1] ? row[1].toString() : null;
                 if (num.length >= 11) {
-                    db.saveContact(num, name, 'Excel Import');
+                    db.saveContact(num, name, 'Excel Upload');
                     loaded++;
                 }
             }
         });
 
-        ctx.reply(`✅ *${loaded} Contacts Loaded into Vault!*\nAb aap seedha *New Matrix Campaign* start kar sakte hain.`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ *${loaded} Contacts Imported into Vault!*\nAb aap /start_campaign command se message bhej sakte hain.`, { parse_mode: 'Markdown' });
     } catch (e) {
         console.error(e);
-        ctx.reply("File parse karne me error aaya.");
+        ctx.reply("❌ File padhne me error aaya.");
     }
 });
 
-// Text commands (Template setup & Matrix start)
+// Commands
 bot.command('set_template', (ctx) => {
     const parts = ctx.message.text.split(' ');
     const id = parseInt(parts[1]);
@@ -119,13 +173,13 @@ bot.command('set_template', (ctx) => {
         db.saveTemplate(id, text);
         ctx.reply(`✅ Template #${id} successfully saved!`);
     } else {
-        ctx.reply("Usage: /set_template <1-10> <Message Text with {name}>");
+        ctx.reply("Usage: /set_template <1-10> <Aapka Message {name} ke sath>");
     }
 });
 
 bot.command('start_campaign', (ctx) => {
     let contacts = db.getAllContacts();
-    if (contacts.length === 0) return ctx.reply("Vault me koi valid contacts nahi hain! Pehle Excel upload karein.");
+    if (contacts.length === 0) return ctx.reply("Vault khali hai! Pehle Excel file upload karein.");
     startMatrixCampaign(contacts, bot, ADMIN_ID);
 });
 
