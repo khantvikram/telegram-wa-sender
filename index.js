@@ -8,7 +8,6 @@ const { initSlot, logoutSlot, autoBootSavedSessions, getSlotInfo } = require('./
 const { startMatrixCampaign, pauseCampaign, resumeCampaign } = require('./matrixEngine');
 const { runGroupSeeding } = require('./groupEngine');
 
-// Render keep-alive dummy web server
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -19,11 +18,10 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 
 const bot = new Telegraf(BOT_TOKEN);
+let awaitingPhoneSlot = null; // Track kaunse slot ke liye phone number maanga hai
 
-// Sirf wahi number connect honge jo pehle se scan the (Zero QR spam)
 autoBootSavedSessions(bot, ADMIN_ID);
 
-// Main Navigation Menu
 function getMainMenu() {
     return Markup.inlineKeyboard([
         [Markup.button.callback('📱 Manage WhatsApp Slots (1-15)', 'menu_slots')],
@@ -36,13 +34,13 @@ function getMainMenu() {
 
 bot.start((ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
+    awaitingPhoneSlot = null;
     ctx.reply("🔥 *ENTERPRISE WA MARKETING DASHBOARD*\n\nNeeche diye gaye buttons se control karein:", {
         parse_mode: 'Markdown',
         ...getMainMenu()
     });
 });
 
-// Slot Management Menu Generator
 function generateSlotsKeyboard() {
     const buttons = [];
     for (let i = 1; i <= 15; i++) {
@@ -64,18 +62,18 @@ function generateSlotsKeyboard() {
 }
 
 bot.action('menu_slots', (ctx) => {
-    ctx.reply("📱 *WhatsApp Slots Manager (1-15)*\n\nJis slot par click karenge, uska status/QR manage kar sakenge:", {
+    awaitingPhoneSlot = null;
+    ctx.reply("📱 *WhatsApp Slots Manager (1-15)*\n\nJis slot ko connect karna hai uspar tap karein:", {
         parse_mode: 'Markdown',
         ...generateSlotsKeyboard()
     });
 });
 
-// Single Slot Detail & Actions
 bot.action(/manage_slot_(\d+)/, (ctx) => {
     const slotId = parseInt(ctx.match[1]);
     const info = getSlotInfo(slotId);
 
-    let msg = `⚙️ *Slot #${slotId} Details:*\n`;
+    let msg = `⚙️ *Slot #${slotId} Setup:*\n`;
     msg += `Role: *${info.role}*\n`;
     msg += `Status: *${info.status}*\n`;
     if (info.phone) msg += `Phone Number: *+${info.phone}*\n`;
@@ -84,28 +82,25 @@ bot.action(/manage_slot_(\d+)/, (ctx) => {
     if (info.status === 'CONNECTED') {
         buttons.push([Markup.button.callback(`❌ Disconnect / Logout Slot #${slotId}`, `logout_slot_${slotId}`)]);
     } else {
-        buttons.push([Markup.button.callback(`📲 Get QR Code to Connect Slot #${slotId}`, `get_qr_${slotId}`)]);
+        buttons.push([Markup.button.callback(`🔢 Connect via Pairing Code (No QR)`, `pair_slot_${slotId}`)]);
     }
     buttons.push([Markup.button.callback('🔙 Back to Slots', 'menu_slots')]);
 
     ctx.reply(msg, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-// Request QR for specific slot
-bot.action(/get_qr_(\d+)/, (ctx) => {
+bot.action(/pair_slot_(\d+)/, (ctx) => {
     const slotId = parseInt(ctx.match[1]);
-    ctx.reply(`⏳ Slot #${slotId} ke liye QR Code generate ho raha hai... WhatsApp photo aate hi scan karein.`);
-    initSlot(slotId, bot, ADMIN_ID, true);
+    awaitingPhoneSlot = slotId;
+    ctx.reply(`📱 *Slot #${slotId} ke liye WhatsApp Number bhejein:*\n\nCountry code ke sath likhein (Jaise: \`919876543210\`)`, { parse_mode: 'Markdown' });
 });
 
-// Logout specific slot
 bot.action(/logout_slot_(\d+)/, async (ctx) => {
     const slotId = parseInt(ctx.match[1]);
     await logoutSlot(slotId, bot, ADMIN_ID);
     ctx.reply(`Slot #${slotId} disconnect kar diya gaya hai.`);
 });
 
-// Fleet Report
 bot.action('menu_report', (ctx) => {
     let report = "📊 *Live Fleet Report (1-15):*\n\n";
     for (let i = 1; i <= 15; i++) {
@@ -117,7 +112,6 @@ bot.action('menu_report', (ctx) => {
     ctx.reply(report, { parse_mode: 'Markdown' });
 });
 
-// Pause / Resume
 bot.action('btn_pause', (ctx) => {
     pauseCampaign();
     ctx.reply("⏸️ Matrix Campaign paused!");
@@ -125,14 +119,34 @@ bot.action('btn_pause', (ctx) => {
 
 bot.action('btn_resume', (ctx) => {
     resumeCampaign(bot, ADMIN_ID);
-    ctx.reply("▶️ Resuming Matrix Campaign from saved position...");
+    ctx.reply("▶️ Resuming Matrix Campaign...");
 });
 
 bot.action('menu_back', (ctx) => {
+    awaitingPhoneSlot = null;
     ctx.reply("🔥 Main Dashboard:", getMainMenu());
 });
 
-// Excel Contact File Upload
+// Normal message / Phone number input handler
+bot.on('text', async (ctx) => {
+    if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
+
+    if (awaitingPhoneSlot) {
+        let inputNum = ctx.message.text.trim().replace(/[^0-9]/g, '');
+        if (inputNum.length === 10) inputNum = '91' + inputNum;
+
+        if (inputNum.length >= 11) {
+            const slotTarget = awaitingPhoneSlot;
+            awaitingPhoneSlot = null;
+            ctx.reply(`⏳ Slot #${slotTarget} ke liye Pairing Code request kiya ja raha hai... Number: +${inputNum}`);
+            initSlot(slotTarget, bot, ADMIN_ID, inputNum);
+        } else {
+            ctx.reply("❌ Phone number galat lag raha hai. Kripya 10 ya 12 digit ka valid number bhejein (Jaise: 9198XXXXXXXX).");
+        }
+    }
+});
+
+// Excel Document handler
 bot.on('document', async (ctx) => {
     if (ctx.from.id.toString() !== ADMIN_ID.toString()) return;
 
@@ -164,7 +178,6 @@ bot.on('document', async (ctx) => {
     }
 });
 
-// Commands
 bot.command('set_template', (ctx) => {
     const parts = ctx.message.text.split(' ');
     const id = parseInt(parts[1]);
