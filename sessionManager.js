@@ -1,5 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
 
@@ -20,18 +21,17 @@ function getRole(slot) {
     return 'Unknown';
 }
 
-async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
+async function initSlot(slotNumber, bot, adminId, mode = 'QR', phoneNumber = null) {
     const baseDir = path.join(__dirname, 'auth_sessions');
     const sessionDir = path.join(baseDir, `slot_${slotNumber}`);
     
-    // Directory pehle hi create kar lein
     ensureDir(baseDir);
     ensureDir(sessionDir);
 
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
 
-    if (!hasCreds && (!phoneNumber || typeof phoneNumber !== 'string')) {
+    if (!hasCreds && mode === 'NONE') {
         statusMap[slotNumber] = 'DISCONNECTED';
         return null;
     }
@@ -54,7 +54,8 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
     sessions[slotNumber] = sock;
     statusMap[slotNumber] = 'CONNECTING';
 
-    if (!sock.authState.creds.registered && phoneNumber) {
+    // Agar user ne Pairing Code manga ho
+    if (!sock.authState.creds.registered && mode === 'PAIR' && phoneNumber) {
         setTimeout(async () => {
             try {
                 let cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
@@ -64,24 +65,32 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
                 await bot.telegram.sendMessage(adminId, 
                     `🔢 *Slot #${slotNumber} Pairing Code:*\n\n` +
                     `👉 \`${formattedCode}\`\n\n` +
-                    `*Steps:*\n` +
-                    `1. WhatsApp kholein ➔ Three dots (⋮) / Settings ➔ Linked Devices\n` +
-                    `2. *Link a Device* par tap karein\n` +
-                    `3. Neeche *Link with phone number instead* chunein\n` +
-                    `4. Yeh 8-digit code wahan daalein`, 
+                    `*(Code copy karke WhatsApp ➔ Linked Devices ➔ Link with phone number me dalein)*`, 
                     { parse_mode: 'Markdown' }
                 );
             } catch (err) {
-                console.error(`Pairing code error slot ${slotNumber}:`, err);
+                console.error(`Pairing error slot ${slotNumber}:`, err);
                 await bot.telegram.sendMessage(adminId, `❌ Pairing error: ${err.message}`);
             }
-        }, 4000);
+        }, 3000);
     }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        // Agar user ne QR manga ho aur socket fresh QR de
+        if (qr && mode === 'QR') {
+            try {
+                const qrBuffer = await qrcode.toBuffer(qr);
+                await bot.telegram.sendPhoto(adminId, { source: qrBuffer }, {
+                    caption: `📱 *Slot #${slotNumber} QR Code:*\nRole: *${getRole(slotNumber)}*\n\n(WhatsApp ➔ Linked Devices ➔ Scan karein)`
+                });
+            } catch (err) {
+                console.error(`QR send error for slot ${slotNumber}:`, err.message);
+            }
+        }
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -89,7 +98,7 @@ async function initSlot(slotNumber, bot, adminId, phoneNumber = null) {
 
             if (shouldReconnect && hasCreds) {
                 statusMap[slotNumber] = 'RECONNECTING';
-                setTimeout(() => initSlot(slotNumber, bot, adminId, null), 5000);
+                setTimeout(() => initSlot(slotNumber, bot, adminId, 'NONE', null), 5000);
             } else {
                 statusMap[slotNumber] = 'DISCONNECTED';
                 delete phoneMap[slotNumber];
@@ -124,7 +133,7 @@ async function logoutSlot(slotNumber, bot, adminId) {
     statusMap[slotNumber] = 'DISCONNECTED';
     delete phoneMap[slotNumber];
 
-    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} clear ho gaya.`);
+    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} disconnected & reset.`);
 }
 
 function getActiveSockets(minSlot = 1, maxSlot = 10) {
@@ -151,7 +160,7 @@ function autoBootSavedSessions(bot, adminId) {
         ensureDir(slotDir);
         const credsFile = path.join(slotDir, 'creds.json');
         if (fs.existsSync(credsFile)) {
-            initSlot(i, bot, adminId, null);
+            initSlot(i, bot, adminId, 'NONE', null);
         }
     }
 }
