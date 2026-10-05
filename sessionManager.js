@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode');
 const path = require('path');
@@ -6,7 +6,7 @@ const fs = require('fs');
 
 const sessions = {}; 
 const statusMap = {}; 
-const phoneMap = {}; // Connected WhatsApp numbers store karne ke liye
+const phoneMap = {};
 
 function getRole(slot) {
     if (slot >= 1 && slot <= 10) return 'Sender';
@@ -20,7 +20,6 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
     const credsFile = path.join(sessionDir, 'creds.json');
     const hasCreds = fs.existsSync(credsFile);
 
-    // Agar session nahi hai aur user ne QR nahi manga toh kuch mat karo
     if (!hasCreds && !forceQR) {
         statusMap[slotNumber] = 'DISCONNECTED';
         return null;
@@ -31,20 +30,24 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    
+    // Latest WhatsApp Web version fetch karna (handshake fail na ho)
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
+        version,
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: Browsers.macOS('Desktop'), // Sabse reliable standard browser profile
         syncFullHistory: false,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000
+        generateHighQualityLinkPreview: false,
+        connectTimeoutMs: 90000,
+        defaultQueryTimeoutMs: 90000,
+        keepAliveIntervalMs: 15000
     });
 
     sessions[slotNumber] = sock;
-    
     statusMap[slotNumber] = 'CONNECTING';
 
     sock.ev.on('creds.update', saveCreds);
@@ -52,7 +55,6 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Sirf user ke mangne par ek hi QR bhejo
         if (qr && forceQR) {
             try {
                 const qrBuffer = await qrcode.toBuffer(qr);
@@ -80,8 +82,6 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
             }
         } else if (connection === 'open') {
             statusMap[slotNumber] = 'CONNECTED';
-            
-            // Connected phone number fetch karna
             let userPhone = sock.user?.id ? sock.user.id.split(':')[0] : 'Linked';
             phoneMap[slotNumber] = userPhone;
 
@@ -92,7 +92,6 @@ async function initSlot(slotNumber, bot, adminId, forceQR = false) {
     return sock;
 }
 
-// Disconnect / Logout slot
 async function logoutSlot(slotNumber, bot, adminId) {
     try {
         if (sessions[slotNumber]) {
@@ -108,7 +107,7 @@ async function logoutSlot(slotNumber, bot, adminId) {
     statusMap[slotNumber] = 'DISCONNECTED';
     delete phoneMap[slotNumber];
 
-    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} has been logged out and cleared.`);
+    await bot.telegram.sendMessage(adminId, `🗑️ Slot #${slotNumber} has been logged out and cache cleared.`);
 }
 
 function getActiveSockets(minSlot = 1, maxSlot = 10) {
@@ -127,7 +126,6 @@ function getSlotInfo(slotNumber) {
     return { status, phone, role: getRole(slotNumber) };
 }
 
-// Purane saved WhatsApps ko chupchap background me connect karna (Bina QR bheje)
 function autoBootSavedSessions(bot, adminId) {
     for (let i = 1; i <= 15; i++) {
         const credsFile = path.join(__dirname, 'auth_sessions', `slot_${i}`, 'creds.json');
